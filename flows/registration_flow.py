@@ -582,12 +582,91 @@ class RegistrationFlow:
             return False
 
     def _is_success(self, page) -> bool:
-        # 模板：根据你站点的“注册成功”标识来改
-        for k in ["Welcome", "欢迎", "Dashboard", "控制台", "Home"]:
+        """
+        检测并完成角色选择对话框（如果有）
+        - 等待角色选择对话框弹出
+        - 随机选择一个职业角色
+        - 点击 "Continue to Dreamina" 按钮
+        - 返回是否成功完成
+        """
+        self._log("step_is_success: checking for role selection dialog...")
+        
+        try:
+            # 1. 等待角色选择对话框出现（最多等待 5 秒）
             try:
-                if page.get_by_text(k).count() > 0:
-                    return True
+                dialog = page.locator("div[role='dialog']").filter(
+                    has=page.get_by_text("What role best describes you?")
+                ).first
+                dialog.wait_for(state="visible", timeout=5000)
+                self._log("step_is_success: role selection dialog detected")
             except Exception:
-                pass
-        return False
+                # 没有对话框，检查是否已成功进入主页面
+                for k in ["Welcome", "欢迎", "Dashboard", "控制台", "Home", "Start Creating"]:
+                    try:
+                        if page.get_by_text(k).count() > 0:
+                            self._log(f"step_is_success: success marker '{k}' detected")
+                            return True
+                    except Exception:
+                        pass
+                self._log("step_is_success: no dialog and no success marker found")
+                return False
+            
+            # 2. 随机选择一个职业角色（避免总是选第一个）
+            import random
+            role_options = [
+                "Art professional",
+                "Designer", 
+                "TV and film industry professional",
+                "Digital marketing and e-commerce professional",
+                "Social media content creator",
+                "Tech professional",
+                "Other (please specify)"
+            ]
+            selected_role = random.choice(role_options)
+            self._log(f"step_is_success: selecting role: {selected_role}")
+            
+            # 3. 点击选中的角色选项
+            try:
+                role_element = page.get_by_text(selected_role).first
+                role_element.scroll_into_view_if_needed()
+                role_element.click(timeout=3000)
+                page.wait_for_timeout(300)  # 等待选中状态更新
+                self._log(f"step_is_success: clicked role '{selected_role}'")
+            except Exception as e:
+                self._log(f"step_is_success: failed to click role '{selected_role}': {e}")
+                # 降级方案：点击第一个选项
+                try:
+                    first_option = page.locator("div.question-option-Pvs1Wx").first
+                    first_option.click(timeout=3000)
+                    page.wait_for_timeout(300)
+                    self._log("step_is_success: clicked first role option (fallback)")
+                except Exception as e2:
+                    self._log(f"step_is_success: fallback also failed: {e2}")
+            
+            # 4. 点击 "Continue to Dreamina" 按钮
+            try:
+                continue_btn = page.get_by_role("button", name="Continue to Dreamina")
+                if continue_btn.count() > 0:
+                    # 等待按钮启用（选中角色后按钮会从 disabled 变为 enabled）
+                    try:
+                        continue_btn.first.wait_for(state="enabled", timeout=3000)
+                    except Exception:
+                        self._log("step_is_success: waiting for button to be enabled...")
+                        page.wait_for_timeout(1000)
+                    
+                    continue_btn.first.click(timeout=3000)
+                    self._log("step_is_success: clicked 'Continue to Dreamina' button")
+                    page.wait_for_timeout(500)  # 等待页面跳转
+                    return True
+                else:
+                    self._log("step_is_success: 'Continue to Dreamina' button not found")
+                    return False
+            except Exception as e:
+                self._log(f"step_is_success: failed to click continue button: {e}")
+                return False
+            
+        except Exception as e:
+            self._log(f"step_is_success: error occurred: {e}")
+            self._try_screenshot(page, prefix="role_selection_error", email="unknown")
+            return False
 

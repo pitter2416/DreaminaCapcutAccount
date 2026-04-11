@@ -10,6 +10,7 @@ from utils import ensure_dir
 @dataclass
 class AccountResult:
     email: str
+    password: str
     status: str  # success | fail | otp_timeout
     reason: str
     started_at: float
@@ -24,6 +25,7 @@ class ResultsStore:
         ensure_dir(results_dir)
         self._status_path = os.path.join(results_dir, "status.jsonl")
         self._success_path = os.path.join(results_dir, "success.txt")
+        self._success_acount_path = os.path.join(results_dir, "success_accounts.txt")
         self._fail_path = os.path.join(results_dir, "fail.txt")
 
     def append(self, res: AccountResult) -> None:
@@ -32,6 +34,8 @@ class ResultsStore:
         if res.status == "success":
             with open(self._success_path, "a", encoding="utf-8") as f:
                 f.write(f"{res.email}\n")
+            with open(self._success_acount_path, "a", encoding="utf-8") as f2:
+                f2.write(f"{res.email}:{res.password}\n")
         else:
             with open(self._fail_path, "a", encoding="utf-8") as f:
                 f.write(f"{res.email}\t{res.status}\t{res.reason}\n")

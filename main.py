@@ -105,6 +105,7 @@ def run_one(flow: RegistrationFlow, store: ResultsStore, acc: Account) -> bool:
         store.append(
             AccountResult(
                 email=acc.email,
+                password=acc.password,
                 status="success" if ok else "fail",
                 reason=reason,
                 started_at=started,
