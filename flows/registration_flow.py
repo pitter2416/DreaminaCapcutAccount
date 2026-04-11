@@ -213,10 +213,6 @@ class RegistrationFlow:
             return False, f"验证码填写失败（code={code} trace_id={trace_id}）{suffix}"
 
         self._log("step_auto_otp: code Success{code}, input year month day")
-        self._delay()
-        self._click_otp_submit_if_any(page)
-        self._delay()
-        self._log("step_auto_otp: end")
         return True, "otp_ok"
 
     def _fill_otp_code(self, page, code: str) -> bool:
@@ -449,8 +445,141 @@ class RegistrationFlow:
         return False
 
     def _step_post_otp_profile(self, page) -> None:
-        # 模板：可在此补充生日/选项等步骤；默认什么都不做
-        self._delay()
+        """
+        填写生日信息（必须大于18岁）
+        适配 CapCut/Dreamina 的 lv-select 组件
+        """
+        self._log("step_post_otp_profile: begin")
+        self._human_pause()
+        
+        # 检查是否在生日填写页面
+        # try:
+        #     if page.get_by_text("When's your birthday?").count() == 0:
+        #         self._log("step_post_otp_profile: not on birthday page, skip")
+        #         return
+        # except Exception:
+        #     self._log("step_post_otp_profile: birthday page not detected, skip")
+        #     return
+        
+        # 生成大于18岁的生日（18-28岁之间随机）
+        from datetime import datetime, timedelta
+        import random
+        
+        today = datetime.now()
+        years_ago = random.randint(18, 28)
+        random_days = random.randint(0, 364)
+        birth_date = today - timedelta(days=years_ago*365 + random_days)
+        
+        year = str(birth_date.year)
+        month_num = birth_date.month    # 1-12
+        day = str(birth_date.day)       # 1-31
+        
+        self._log(f"step_post_otp_profile: generated birthday: {year}-{month_num}-{day} (age: {years_ago})")
+        
+        try:
+            # ========== 1. 填写年份 ==========
+            year_input = page.locator("input[placeholder='Year']")
+            if year_input.count() > 0:
+                year_input.first.fill(year)
+                self._log(f"step_post_otp_profile: year filled: {year}")
+                page.wait_for_timeout(300)
+            
+            # ========== 2. 选择月份（英文月份名）==========
+            month_name = self._month_num_to_en(month_num)
+            self._log(f"step_post_otp_profile: selecting month: {month_name}")
+            if self._select_lv_option(page, placeholder="Month", option_text=month_name):
+                self._log(f"step_post_otp_profile: month selected: {month_name}")
+            else:
+                self._log("step_post_otp_profile: month selection failed")
+                return
+            
+            page.wait_for_timeout(200)
+            
+            # ========== 3. 选择日期（数字）==========
+            self._log(f"step_post_otp_profile: selecting day: {day}")
+            if self._select_lv_option(page, placeholder="Day", option_text=day):
+                self._log(f"step_post_otp_profile: day selected: {day}")
+            else:
+                self._log("step_post_otp_profile: day selection failed")
+                return
+            
+            page.wait_for_timeout(300)
+            
+            # ========== 4. 点击 Next 按钮 ==========
+            next_btn = page.locator("button.lv_new_sign_in_panel_wide-birthday-next")
+            if next_btn.count() > 0:
+                try:
+                    next_btn.first.wait_for(state="enabled", timeout=5000)
+                except Exception:
+                    self._log("step_post_otp_profile: Next button still disabled, waiting...")
+                    page.wait_for_timeout(1000)
+                
+                if "lv-btn-disabled" not in (next_btn.first.get_attribute("class", timeout=2000) or ""):
+                    next_btn.first.click()
+                    self._log("step_post_otp_profile: clicked Next button")
+                    self._delay()
+                else:
+                    self._log("step_post_otp_profile: Next button still disabled after fill")
+            
+            self._log("step_post_otp_profile: completed successfully")
+            
+        except Exception as e:
+            self._log(f"step_post_otp_profile: failed: {e}")
+            self._try_screenshot(page, prefix="birthday_error", email="unknown")
+            raise
+
+    def _month_num_to_en(self, month_num: int) -> str:
+        """数字月份转英文全称"""
+        months = [
+            "", "January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December"
+        ]
+        return months[month_num] if 1 <= month_num <= 12 else ""
+
+    def _select_lv_option(self, page, *, placeholder: str, option_text: str) -> bool:
+        """
+        通用方法：操作 lv-select 组件的下拉选择
+        - placeholder: 输入框的 placeholder，如 "Month" / "Day"
+        - option_text: 要选择的选项文本（精确匹配），如 "March" / "9"
+        """
+        try:
+            # 1. 定位 combobox 容器（通过 placeholder 关联）
+            combobox = page.locator(f"div[role='combobox']").filter(
+                has=page.locator(f"input[placeholder='{placeholder}']")
+            ).first
+            
+            # 2. 点击打开下拉菜单
+            combobox.click(timeout=3000)
+            page.wait_for_timeout(500)  # 等待 popup 动画 + 选项渲染
+            
+            # 3. 等待选项列表出现（lv-select-popup-xxx）
+            popup = page.locator("div[id^='lv-select-popup']").first
+            try:
+                popup.wait_for(state="visible", timeout=3000)
+            except Exception:
+                self._log(f"_select_lv_option: popup not visible for {placeholder}")
+                return False
+            
+            # 4. 精确匹配选项文本（li[role="option"].lv-select-option）
+            # 使用 text_content() 确保精确匹配，避免 "1" 匹配到 "10"
+            options = popup.locator("li[role='option'].lv-select-option").all()
+            for opt in options:
+                try:
+                    text = opt.text_content().strip()
+                    if text == option_text:
+                        opt.scroll_into_view_if_needed()
+                        opt.click(timeout=3000)
+                        self._log(f"_select_lv_option: selected {placeholder}='{option_text}'")
+                        return True
+                except Exception:
+                    continue
+            
+            self._log(f"_select_lv_option: option '{option_text}' not found for {placeholder}")
+            return False
+            
+        except Exception as e:
+            self._log(f"_select_lv_option: error for {placeholder}='{option_text}': {e}")
+            return False
 
     def _is_success(self, page) -> bool:
         # 模板：根据你站点的“注册成功”标识来改
