@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -9,7 +10,7 @@ from controllers.browser_controller import BrowserConfig, BrowserController
 from flows.registration_flow import FlowConfig, RegistrationFlow
 from results_store import AccountResult, ResultsStore
 from throttle import FailureThrottleConfig, ThrottleState, on_failure, on_success
-from utils import Account, ensure_dir, human_delay, load_accounts
+from utils import Account, ensure_dir, human_delay, load_accounts, remove_accounts
 from sms_helper import SMSCodeFetcher, SMSFetcherConfig
 
 
@@ -91,13 +92,18 @@ def _finish_future(future, stats, throttle_state: ThrottleState, throttle_cfg: F
         stats["succeeded"] += 1
         if apply_throttle:
             on_success(throttle_state, throttle_cfg)
+        try:
+            if hasattr(future, "acc"):
+                future.acc._success_recorded = True
+        except Exception:
+            pass
     else:
         stats["failed"] += 1
         if apply_throttle:
             on_failure(throttle_state, throttle_cfg)
 
 
-def run_one(flow: RegistrationFlow, store: ResultsStore, acc: Account) -> bool:
+def run_one(flow: RegistrationFlow, store: ResultsStore, acc: Account, accounts_file: str) -> bool:
     started = time.time()
     try:
         ok, reason = flow.run(acc)
@@ -113,6 +119,8 @@ def run_one(flow: RegistrationFlow, store: ResultsStore, acc: Account) -> bool:
                 run_id=store.run_id,
             )
         )
+        if ok:
+            remove_accounts(accounts_file, [acc.email])
         return ok
     except TimeoutError as e:
         ended = time.time()
@@ -192,24 +200,48 @@ def run_loop(cfg: AppConfig) -> None:
     infinite_mode = cfg.max_tasks <= 0
     stop_requested = False
     throttle_state = ThrottleState(initial_max=max(1, cfg.concurrent_flows))
+    succeeded_emails = set(succeeded)
+    succeeded_lock = threading.Lock()
+    next_index = 0
 
     with ThreadPoolExecutor(max_workers=max(1, cfg.concurrent_flows)) as executor:
         running = set()
 
-        def next_account(i: int) -> Account:
-            return pending_accounts[i % len(pending_accounts)]
+        def next_account() -> Optional[Account]:
+            nonlocal next_index
+            if not pending_accounts:
+                return None
+            for _ in range(len(pending_accounts)):
+                acc = pending_accounts[next_index]
+                next_index = (next_index + 1) % len(pending_accounts)
+                with succeeded_lock:
+                    if acc.email not in succeeded_emails:
+                        return acc
+            return None
 
         try:
-            while (infinite_mode or task_counter < cfg.max_tasks) or len(running) > 0:
+            while (((infinite_mode or task_counter < cfg.max_tasks) and len(succeeded_emails) < len(pending_accounts))
+                   or len(running) > 0):
                 done = {f for f in running if f.done()}
                 for f in done:
                     _finish_future(f, stats, throttle_state, cfg.failure_throttle, apply_throttle=True)
+                    if hasattr(f, "acc") and getattr(f, "acc", None) is not None:
+                        try:
+                            if f.result():
+                                with succeeded_lock:
+                                    succeeded_emails.add(f.acc.email)
+                        except Exception:
+                            pass
                     running.remove(f)
 
                 limit = throttle_state.dynamic_limit
-                while (not stop_requested) and len(running) < limit and (infinite_mode or task_counter < cfg.max_tasks):
-                    acc = next_account(task_counter)
-                    fut = executor.submit(run_one, flow, store, acc)
+                while (not stop_requested) and len(running) < limit and ((infinite_mode or task_counter < cfg.max_tasks)
+                      and len(succeeded_emails) < len(pending_accounts)):
+                    acc = next_account()
+                    if acc is None:
+                        break
+                    fut = executor.submit(run_one, flow, store, acc, cfg.accounts_file)
+                    fut.acc = acc
                     running.add(fut)
                     task_counter += 1
                     if infinite_mode and task_counter % max(1, cfg.concurrent_flows) == 0:

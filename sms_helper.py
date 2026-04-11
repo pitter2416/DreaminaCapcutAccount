@@ -58,7 +58,7 @@ class SMSCodeFetcher:
             "MailBox": mailbox,
             "FilterType": "0",
             "PageIndex": "1",
-            "PageCount": "10",
+            "PageCount": "1",
             "traceId": trace_id,
         }
 
@@ -156,7 +156,7 @@ class SMSCodeFetcher:
                 "MailBox": mailbox,
                 "FilterType": "0",
                 "PageIndex": "1",
-                "PageCount": "10",
+                "PageCount": "1",
                 "traceId": trace_id,
             }
             try:

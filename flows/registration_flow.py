@@ -134,7 +134,9 @@ class RegistrationFlow:
             if self._is_on_otp_step(page):
                 self._log("otp step detected")
                 if self.cfg.sms_enabled and self.cfg.sms_fetcher:
-                    ok, reason = self._step_auto_otp(page, acc, code_baseline_ms=submit_ts_ms)
+                    # 重新记录当前时间作为 OTP baseline，避免生日填写延迟导致验证码被认为"太旧"
+                    otp_baseline_ms = int(time.time() * 1000)
+                    ok, reason = self._step_auto_otp(page, acc, code_baseline_ms=otp_baseline_ms)
                     if not ok:
                         return False, reason
                 else:
@@ -482,7 +484,22 @@ class RegistrationFlow:
             if year_input.count() > 0:
                 year_input.first.fill(year)
                 self._log(f"step_post_otp_profile: year filled: {year}")
-                page.wait_for_timeout(300)
+                
+                # 等待年份值真正设置完成（验证输入框的值）
+                page.wait_for_timeout(500)
+                try:
+                    year_input.first.wait_for(state="attached", timeout=3000)
+                    # 验证年份是否已正确设置
+                    input_value = year_input.first.input_value(timeout=2000)
+                    if input_value != year:
+                        self._log(f"step_post_otp_profile: year value mismatch, retrying... (expected={year}, got={input_value})")
+                        year_input.first.fill(year)
+                        page.wait_for_timeout(300)
+                except Exception as e:
+                    self._log(f"step_post_otp_profile: year verification failed: {e}")
+                
+                # 等待月份下拉框变为可交互状态
+                page.wait_for_timeout(800)
             
             # ========== 2. 选择月份（英文月份名）==========
             month_name = self._month_num_to_en(month_num)
@@ -493,7 +510,8 @@ class RegistrationFlow:
                 self._log("step_post_otp_profile: month selection failed")
                 return
             
-            page.wait_for_timeout(200)
+            # 等待日期下拉框变为可交互状态
+            page.wait_for_timeout(600)
             
             # ========== 3. 选择日期（数字）==========
             self._log(f"step_post_otp_profile: selecting day: {day}")

@@ -1,6 +1,7 @@
 import os
 import random
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Tuple
@@ -29,6 +30,9 @@ def ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
 
+_REMOVE_ACCOUNTS_LOCK = threading.Lock()
+
+
 def load_accounts(path: str) -> List[Account]:
     if not os.path.exists(path):
         raise FileNotFoundError(
@@ -48,4 +52,31 @@ def load_accounts(path: str) -> List[Account]:
     if not accounts:
         raise ValueError("账号文件为空：请至少提供一行 email: password")
     return accounts
+
+
+def remove_accounts(path: str, emails_to_remove: Iterable[str]) -> None:
+    emails_to_remove_set = {email.strip() for email in emails_to_remove if email and email.strip()}
+    if not emails_to_remove_set:
+        return
+
+    with _REMOVE_ACCOUNTS_LOCK:
+        if not os.path.exists(path):
+            return
+
+        temp_path = f"{path}.tmp"
+        with open(path, "r", encoding="utf-8") as src, open(temp_path, "w", encoding="utf-8") as dst:
+            for line in src:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    dst.write(line)
+                    continue
+                m = EMAIL_PASS_RE.match(stripped)
+                if not m:
+                    dst.write(line)
+                    continue
+                if m.group("email") in emails_to_remove_set:
+                    continue
+                dst.write(line)
+
+        os.replace(temp_path, path)
 
