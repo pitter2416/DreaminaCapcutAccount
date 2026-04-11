@@ -212,7 +212,7 @@ class RegistrationFlow:
             suffix = f" | screenshot={p}" if p else ""
             return False, f"验证码填写失败（code={code} trace_id={trace_id}）{suffix}"
 
-        self._log("step_auto_otp: code filled, try submit")
+        self._log("step_auto_otp: code Success{code}, input year month day")
         self._delay()
         self._click_otp_submit_if_any(page)
         self._delay()
@@ -222,76 +222,49 @@ class RegistrationFlow:
     def _fill_otp_code(self, page, code: str) -> bool:
         code = (code or "").strip()
         if len(code) != 6:
+            self._log(f"step_auto_otp: invalid code length={len(code)}")
             return False
 
-        # 0) 站点定制：验证码区可能异步渲染，先短等待后多策略填写
-        for _ in range(6):
-            try:
-                div_count = page.locator("div.verification_code_input-number").count()
-                input_count = page.locator("div.verification_code_input-number input").count()
-                if div_count > 0 or input_count > 0:
-                    break
-            except Exception:
-                pass
-            page.wait_for_timeout(300)
+        self._log("step_auto_otp: targeting OTP hidden input...")
 
-        # 0.1) 结构A：每格内有 input
+        # 1. 点击第一个视觉框，强制将焦点/上下文拉回弹窗内部（彻底解决背景滚动问题）
         try:
-            box_inputs = page.locator("div.verification_code_input-number input")
-            n = box_inputs.count()
-            self._log(f"step_auto_otp: otp box inputs count={n}")
-            if n >= 6:
-                for i in range(6):
-                    box_inputs.nth(i).fill(code[i])
-                return True
+            page.locator("div.verification_code_input-number").first.click(timeout=3000)
+            page.wait_for_timeout(200)  # 等待前端焦点切换完成
         except Exception as e:
-            self._log(f"step_auto_otp: fill otp box inputs failed: {e}")
+            self._log(f"step_auto_otp: click visual box failed: {e}")
 
-        # 0.2) 结构B：6个 div 作为可点击框，点击后用键盘逐位输入
+        # 2. 定位底部真实的隐藏输入框
+        # 使用 maxlength=6 精准匹配，避免误触其他 input
+        hidden_input = page.locator("input[maxlength='6']")
+
         try:
-            otp_boxes = page.locator("div.verification_code_input-number")
-            n = otp_boxes.count()
-            self._log(f"step_auto_otp: otp box div count={n}")
-            if n >= 6:
-                for i in range(6):
-                    otp_boxes.nth(i).click(timeout=3000)
-                    page.keyboard.type(code[i], delay=30)
+            hidden_input.wait_for(state="attached", timeout=3000)
+
+            # 方案A：Playwright 原生 fill (对 opacity:0 的元素通常可直接操作)
+            try:
+                hidden_input.fill(code)
+                self._log("step_auto_otp: native fill() succeeded")
                 return True
+            except Exception as e:
+                self._log(f"step_auto_otp: native fill blocked, fallback to JS: {e}")
+
+            # 方案B：JS 强制赋值 + 派发事件 (100% 兼容 React/Vue/AntDesign 受控组件)
+            hidden_input.evaluate("""(el, code) => {
+                el.focus();
+                el.value = code;
+                // 触发框架必需的 input 和 change 事件，使视觉 Div 同步更新
+                el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste' }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                // 兼容部分严格校验库的 keyup 监听
+                el.dispatchEvent(new KeyboardEvent('keyup', { key: code.slice(-1), bubbles: true }));
+            }""", code)
+            self._log("step_auto_otp: JS direct injection succeeded")
+            return True
+
         except Exception as e:
-            self._log(f"step_auto_otp: fill otp box div failed: {e}")
-
-        # 1) 常见：单输入框（label/aria-label）
-        for label in ["验证码", "驗證碼", "Verification code", "verification code", "Code", "code"]:
-            try:
-                loc = page.get_by_label(label)
-                if loc.count() > 0:
-                    loc.first.fill(code)
-                    return True
-            except Exception:
-                pass
-
-        # 2) 常见：one-time-code / 分格输入框
-        selectors = [
-            "input[autocomplete='one-time-code']",
-            "input[autocomplete='one-time-code'][inputmode]",
-            "input[inputmode='numeric']",
-            "input[type='tel']",
-        ]
-        for sel in selectors:
-            try:
-                loc = page.locator(sel)
-                n = loc.count()
-                if n >= 6:
-                    for i in range(6):
-                        loc.nth(i).fill(code[i])
-                    return True
-                if n == 1:
-                    loc.first.fill(code)
-                    return True
-            except Exception:
-                pass
-
-        return False
+            self._log(f"step_auto_otp: locate hidden input failed: {e}")
+            return False
 
     def _click_otp_submit_if_any(self, page) -> None:
         # 尽量用 role/button 的候选文本点击；找不到就不报错
@@ -312,88 +285,44 @@ class RegistrationFlow:
         - 优先找含 “注册/Sign in/Create” 的链接或按钮
         - 找不到则不报错（留给后续步骤/自定义）
         """
+        
         self._log("step_open_register: begin")
         self._human_pause()
 
         try:
+            # 1) 先检查是否已经进入目标状态（避免重复操作）
             if page.locator("div[class*='lv-spin-children']").count() > 0:
                 self._log("step_open_register: already entered (lv-spin-children matched)")
                 if self._click_expand_sign_in_button(page):
                     return
-        except Exception:
-            pass
-
-        try:
-            entry = page.locator("div[class*='content-Atv29u']")
-            entry_count = entry.count()
-            self._log(f"step_open_register: content-Atv29u count={entry_count}")
-            if entry_count > 0:
-                for i in range(entry_count):
-                    try:
-                        self._log(f"step_open_register: try click content-Atv29u[{i}]")
-                        item = entry.nth(i)
-                        item.scroll_into_view_if_needed()
-                        item.click(timeout=4000)
-                        self._delay()
-                        try:
-                            if page.locator("div[class*='lv-spin-children']").count() > 0:
-                                self._log(
-                                    f"step_open_register: content-Atv29u[{i}] matched lv-spin-children"
-                                )
-                                if self._click_expand_sign_in_button(page):
-                                    return
-                        except Exception:
-                            pass
-                        if self._has_credential_fields(page):
-                            self._log(f"step_open_register: content-Atv29u[{i}] matched credential form")
-                            if self._click_expand_sign_in_button(page):
-                                return
-                    except Exception as e:
-                        self._log(f"step_open_register: content-Atv29u[{i}] failed: {e}")
         except Exception as e:
-            self._log(f"step_open_register: content-Atv29u click failed: {e}")
+            self._log(f"step_open_register: pre-check failed: {e}")
 
-        candidates = ["注册", "註冊", "Sign in", "Sign up", "Create", "Create Account"]
-        for text in candidates:
-            try:
-                loc = page.get_by_role("link", name=text)
-                count = loc.count()
-                self._log(f"step_open_register: link '{text}' count={count}")
-                if count > 0:
-                    self._log(f"step_open_register: click link '{text}'")
-                    loc.first.click()
-                    self._delay()
-                    try:
-                        if page.locator("div[class*='lv-spin-children']").count() > 0:
-                            self._log(f"step_open_register: link '{text}' matched lv-spin-children")
-                            if self._click_expand_sign_in_button(page):
-                                return
-                    except Exception:
-                        pass
-                    if self._click_expand_sign_in_button(page):
-                        return
-            except Exception as e:
-                self._log(f"step_open_register: link '{text}' failed: {e}")
-            try:
-                loc = page.get_by_role("button", name=text)
-                count = loc.count()
-                self._log(f"step_open_register: button '{text}' count={count}")
-                if count > 0:
-                    self._log(f"step_open_register: click button '{text}'")
-                    loc.first.click()
-                    self._delay()
-                    try:
-                        if page.locator("div[class*='lv-spin-children']").count() > 0:
-                            self._log(f"step_open_register: button '{text}' matched lv-spin-children")
-                            if self._click_expand_sign_in_button(page):
-                                return
-                    except Exception:
-                        pass
-                    if self._click_expand_sign_in_button(page):
-                        return
-            except Exception as e:
-                self._log(f"step_open_register: button '{text}' failed: {e}")
-        self._log("step_open_register: no register entry matched or expand-button not clicked")
+        # 2) 核心逻辑：等待并点击 #AIGeneratedRecord
+        try:
+            self._log("step_open_register: waiting for div#AIGeneratedRecord")
+            target = page.locator("div#AIGeneratedRecord")
+            
+            # 等待元素出现（可配置超时，这里用 15 秒）
+            target.wait_for(state="visible", timeout=15000)
+            target.scroll_into_view_if_needed()
+            target.click(timeout=5000)
+            
+            self._log("step_open_register: clicked div#AIGeneratedRecord")
+            self._delay()
+            
+            # 3) 点击后尝试展开登录/注册表单（保留原有逻辑）
+            if self._click_expand_sign_in_button(page):
+                self._log("step_open_register: expand button clicked successfully")
+                return
+                
+        except Exception as e:
+            self._log(f"step_open_register: click div#AIGeneratedRecord failed: {e}")
+            # 可选：失败时截图便于排查
+            # self._try_screenshot(page, prefix="open_register_failed", email="unknown")
+            raise
+
+        self._log("step_open_register: end (no action taken or fallback)")
 
     def _step_fill_credentials(self, page, acc: Account) -> Optional[int]:
         """
