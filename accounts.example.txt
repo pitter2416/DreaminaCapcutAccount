@@ -1,0 +1,2 @@
+someone@example.com: P@ssw0rd!
+someone2@example.com: AnotherP@ssw0rd!
