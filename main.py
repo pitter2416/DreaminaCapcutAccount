@@ -19,13 +19,13 @@ from sms_helper import SMSCodeFetcher, SMSFetcherConfig
 SHUTTING_DOWN = False
 
 
-def auto_generate_accounts(accounts_file: str, count: int = 20) -> bool:
+def auto_generate_accounts(accounts_file: str, count: int = 10000) -> bool:
     """
     当账号用尽时，自动生成新账号
     
     Args:
         accounts_file: 账号文件路径
-        count: 生成数量
+        count: 生成数量（默认10000）
     
     Returns:
         bool: 是否成功生成
@@ -236,10 +236,34 @@ def run_loop(cfg: AppConfig) -> None:
     accounts = load_accounts(cfg.accounts_file)
     succeeded = store.load_success_set()
     pending_accounts = [a for a in accounts if a.email not in succeeded]
-    if not pending_accounts:
-        print("所有账号都已成功记录，尝试自动生成新账号...")
-        # 自动生成新账号
-        if auto_generate_accounts(cfg.accounts_file, count=20):
+    
+    # 如果第一次启动没有可用账号，必须先生成
+    if not pending_accounts and not accounts:
+        print("\n" + "="*60)
+        print("[AutoGen] ⚠️  检测到 accounts.txt 为空")
+        print("[AutoGen] 必须先生成账号才能继续运行")
+        print("="*60 + "\n")
+        
+        # 强制生成10000个账号
+        if auto_generate_accounts(cfg.accounts_file, count=10000):
+            # 重新加载账号
+            accounts = load_accounts(cfg.accounts_file)
+            succeeded = store.load_success_set()
+            pending_accounts = [a for a in accounts if a.email not in succeeded]
+            
+            if not pending_accounts:
+                print("❌ 生成后仍然没有可用账号，退出。")
+                return
+            else:
+                print(f"\n✅ 成功加载 {len(pending_accounts)} 个新账号，开始运行...\n")
+        else:
+            print("\n❌ 自动生成账号失败，无法继续运行。")
+            print("请检查 generate_accounts.py 是否存在且可执行。")
+            return
+    elif not pending_accounts:
+        # 有账号但都已成功，尝试生成新账号
+        print("\n所有账号都已成功记录，尝试自动生成新账号...")
+        if auto_generate_accounts(cfg.accounts_file, count=10000):
             # 重新加载账号
             accounts = load_accounts(cfg.accounts_file)
             succeeded = store.load_success_set()
@@ -290,15 +314,19 @@ def run_loop(cfg: AppConfig) -> None:
         def next_account() -> Optional[Account]:
             nonlocal next_index, pending_accounts
             if not pending_accounts:
-                # 尝试自动生成新账号
-                print("\n[AutoGen] 运行时检测到账号已用完，尝试生成新账号...")
-                if auto_generate_accounts(cfg.accounts_file, count=20):
+                # 尝试自动生成新账号（10000个）
+                print("\n" + "="*60)
+                print("[AutoGen] 运行时检测到账号已用完")
+                print("[AutoGen] 开始自动生成 10000 个新账号...")
+                print("="*60)
+                
+                if auto_generate_accounts(cfg.accounts_file, count=10000):
                     # 重新加载账号
                     accounts = load_accounts(cfg.accounts_file)
                     succeeded = store.load_success_set()
                     pending_accounts = [a for a in accounts if a.email not in succeeded]
                     next_index = 0  # 重置索引
-                    print(f"[AutoGen] ✅ 已加载 {len(pending_accounts)} 个新账号")
+                    print(f"\n[AutoGen] ✅ 已加载 {len(pending_accounts)} 个新账号\n")
                 else:
                     print("[AutoGen] ❌ 生成失败")
                     return None
