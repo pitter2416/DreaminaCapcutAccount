@@ -134,8 +134,9 @@ class RegistrationFlow:
             if self._is_on_otp_step(page):
                 self._log("otp step detected")
                 if self.cfg.sms_enabled and self.cfg.sms_fetcher:
-                    # 重新记录当前时间作为 OTP baseline，避免生日填写延迟导致验证码被认为"太旧"
+                    # 传入当前时间作为参考，SMS获取器会自动调整（往前推60秒）
                     otp_baseline_ms = int(time.time() * 1000)
+                    self._log(f"step_auto_otp: using reference time={otp_baseline_ms}")
                     ok, reason = self._step_auto_otp(page, acc, code_baseline_ms=otp_baseline_ms)
                     if not ok:
                         return False, reason
@@ -214,6 +215,24 @@ class RegistrationFlow:
             suffix = f" | screenshot={p}" if p else ""
             return False, f"验证码填写失败（code={code} trace_id={trace_id}）{suffix}"
 
+        # 关键：等待 OTP 验证完成并页面跳转
+        self._log("step_auto_otp: waiting for OTP verification and page transition...")
+        try:
+            # 等待页面不再是 OTP 页面（最多等待 5 秒，减少等待时间）
+            for attempt in range(10):  # 10 * 500ms = 5s
+                page.wait_for_timeout(500)
+                
+                # 检查是否还在 OTP 页面
+                if not self._is_on_otp_step(page):
+                    self._log(f"step_auto_otp: OTP verification completed, left OTP page at attempt {attempt + 1}")
+                    break
+                
+                if attempt == 9:
+                    self._log("step_auto_otp: WARNING - still on OTP page after 5s, proceeding anyway")
+        except Exception as e:
+            self._log(f"step_auto_otp: error waiting for page transition: {e}")
+            # 不抛出异常，继续执行
+        
         self._log("step_auto_otp: code Success{code}, input year month day")
         return True, "otp_ok"
 
@@ -452,16 +471,42 @@ class RegistrationFlow:
         适配 CapCut/Dreamina 的 lv-select 组件
         """
         self._log("step_post_otp_profile: begin")
-        self._human_pause()
+        
+        # 快速检查页面状态（减少等待时间）
+        page.wait_for_timeout(300)
+        
+        # 检查当前 URL 和页面状态
+        current_url = page.url
+        self._log(f"step_post_otp_profile: current URL: {current_url}")
+        
+        # 检查是否还在 OTP 页面（说明 OTP 验证可能失败）
+        if self._is_on_otp_step(page):
+            self._log("step_post_otp_profile: ERROR - still on OTP page!")
+            p = self._try_screenshot(page, prefix="still_on_otp_page", email="unknown")
+            suffix = f" | screenshot={p}" if p else ""
+            raise RuntimeError(f"OTP 验证后仍停留在验证码页面，可能验证码错误或验证失败{suffix}")
+        
+        # 使用较短的 human_pause
+        self._delay()
         
         # 检查是否在生日填写页面
-        # try:
-        #     if page.get_by_text("When's your birthday?").count() == 0:
-        #         self._log("step_post_otp_profile: not on birthday page, skip")
-        #         return
-        # except Exception:
-        #     self._log("step_post_otp_profile: birthday page not detected, skip")
-        #     return
+        try:
+            birthday_text_found = page.get_by_text("When's your birthday?").count() > 0
+            if not birthday_text_found:
+                # 尝试其他可能的文本
+                alternative_texts = ["生日", "Birthday", "birth date"]
+                for alt_text in alternative_texts:
+                    if page.get_by_text(alt_text).count() > 0:
+                        self._log(f"step_post_otp_profile: found alternative text: '{alt_text}'")
+                        birthday_text_found = True
+                        break
+                
+                if not birthday_text_found:
+                    self._log("step_post_otp_profile: not on birthday page, skip")
+                    return
+        except Exception as e:
+            self._log(f"step_post_otp_profile: error checking birthday page: {e}")
+            return
         
         # 生成大于18岁的生日（18-28岁之间随机）
         from datetime import datetime, timedelta
@@ -485,43 +530,37 @@ class RegistrationFlow:
                 year_input.first.fill(year)
                 self._log(f"step_post_otp_profile: year filled: {year}")
                 
-                # 等待年份值真正设置完成（验证输入框的值）
-                page.wait_for_timeout(500)
-                try:
-                    year_input.first.wait_for(state="attached", timeout=3000)
-                    # 验证年份是否已正确设置
-                    input_value = year_input.first.input_value(timeout=2000)
-                    if input_value != year:
-                        self._log(f"step_post_otp_profile: year value mismatch, retrying... (expected={year}, got={input_value})")
-                        year_input.first.fill(year)
-                        page.wait_for_timeout(300)
-                except Exception as e:
-                    self._log(f"step_post_otp_profile: year verification failed: {e}")
+                # 减少验证等待时间
+                page.wait_for_timeout(200)
                 
-                # 等待月份下拉框变为可交互状态
-                page.wait_for_timeout(800)
+                # 等待月份下拉框变为可交互状态（减少等待）
+                page.wait_for_timeout(300)
+            else:
+                self._log("step_post_otp_profile: year input not found")
             
             # ========== 2. 选择月份（英文月份名）==========
             month_name = self._month_num_to_en(month_num)
             self._log(f"step_post_otp_profile: selecting month: {month_name}")
-            if self._select_lv_option(page, placeholder="Month", option_text=month_name):
-                self._log(f"step_post_otp_profile: month selected: {month_name}")
-            else:
-                self._log("step_post_otp_profile: month selection failed")
-                return
+            if not self._select_lv_option(page, placeholder="Month", option_text=month_name):
+                self._log("step_post_otp_profile: month selection failed - CRITICAL ERROR")
+                p = self._try_screenshot(page, prefix="birthday_month_failed", email="unknown")
+                suffix = f" | screenshot={p}" if p else ""
+                raise RuntimeError(f"生日月份选择失败{suffix}")
+            self._log(f"step_post_otp_profile: month selected: {month_name}")
             
-            # 等待日期下拉框变为可交互状态
-            page.wait_for_timeout(600)
+            # 等待日期下拉框变为可交互状态（减少等待）
+            page.wait_for_timeout(200)
             
             # ========== 3. 选择日期（数字）==========
             self._log(f"step_post_otp_profile: selecting day: {day}")
-            if self._select_lv_option(page, placeholder="Day", option_text=day):
-                self._log(f"step_post_otp_profile: day selected: {day}")
-            else:
-                self._log("step_post_otp_profile: day selection failed")
-                return
+            if not self._select_lv_option(page, placeholder="Day", option_text=day):
+                self._log("step_post_otp_profile: day selection failed - CRITICAL ERROR")
+                p = self._try_screenshot(page, prefix="birthday_day_failed", email="unknown")
+                suffix = f" | screenshot={p}" if p else ""
+                raise RuntimeError(f"生日日期选择失败{suffix}")
+            self._log(f"step_post_otp_profile: day selected: {day}")
             
-            page.wait_for_timeout(300)
+            page.wait_for_timeout(150)
             
             # ========== 4. 点击 Next 按钮 ==========
             next_btn = page.locator("button.lv_new_sign_in_panel_wide-birthday-next")
@@ -538,13 +577,19 @@ class RegistrationFlow:
                     self._delay()
                 else:
                     self._log("step_post_otp_profile: Next button still disabled after fill")
+            else:
+                self._log("step_post_otp_profile: Next button not found")
             
             self._log("step_post_otp_profile: completed successfully")
             
+        except RuntimeError:
+            # 重新抛出 RuntimeError（我们的自定义错误）
+            raise
         except Exception as e:
             self._log(f"step_post_otp_profile: failed: {e}")
-            self._try_screenshot(page, prefix="birthday_error", email="unknown")
-            raise
+            p = self._try_screenshot(page, prefix="birthday_error", email="unknown")
+            suffix = f" | screenshot={p}" if p else ""
+            raise RuntimeError(f"生日填写异常: {e}{suffix}")
 
     def _month_num_to_en(self, month_num: int) -> str:
         """数字月份转英文全称"""
@@ -605,84 +650,177 @@ class RegistrationFlow:
         - 等待角色选择对话框弹出
         - 随机选择一个职业角色
         - 点击 "Continue to Dreamina" 按钮
+        - 验证是否真正进入主页面
         - 返回是否成功完成
         """
         self._log("step_is_success: checking for role selection dialog...")
         
         try:
             # 1. 等待角色选择对话框出现（最多等待 5 秒）
+            has_role_dialog = False
             try:
                 dialog = page.locator("div[role='dialog']").filter(
                     has=page.get_by_text("What role best describes you?")
                 ).first
                 dialog.wait_for(state="visible", timeout=5000)
                 self._log("step_is_success: role selection dialog detected")
+                has_role_dialog = True
             except Exception:
-                # 没有对话框，检查是否已成功进入主页面
-                for k in ["Welcome", "欢迎", "Dashboard", "控制台", "Home", "Start Creating"]:
-                    try:
-                        if page.get_by_text(k).count() > 0:
-                            self._log(f"step_is_success: success marker '{k}' detected")
-                            return True
-                    except Exception:
-                        pass
-                self._log("step_is_success: no dialog and no success marker found")
-                return False
+                self._log("step_is_success: no role selection dialog found")
             
-            # 2. 随机选择一个职业角色（避免总是选第一个）
-            import random
-            role_options = [
-                "Art professional",
-                "Designer", 
-                "TV and film industry professional",
-                "Digital marketing and e-commerce professional",
-                "Social media content creator",
-                "Tech professional",
-                "Other (please specify)"
-            ]
-            selected_role = random.choice(role_options)
-            self._log(f"step_is_success: selecting role: {selected_role}")
-            
-            # 3. 点击选中的角色选项
-            try:
-                role_element = page.get_by_text(selected_role).first
-                role_element.scroll_into_view_if_needed()
-                role_element.click(timeout=3000)
-                page.wait_for_timeout(300)  # 等待选中状态更新
-                self._log(f"step_is_success: clicked role '{selected_role}'")
-            except Exception as e:
-                self._log(f"step_is_success: failed to click role '{selected_role}': {e}")
-                # 降级方案：点击第一个选项
+            if has_role_dialog:
+                # 2. 随机选择一个职业角色（避免总是选第一个）
+                import random
+                role_options = [
+                    "Art professional",
+                    "Designer", 
+                    "TV and film industry professional",
+                    "Digital marketing and e-commerce professional",
+                    "Social media content creator",
+                    "Tech professional",
+                    "Other (please specify)"
+                ]
+                selected_role = random.choice(role_options)
+                self._log(f"step_is_success: selecting role: {selected_role}")
+                
+                # 3. 点击选中的角色选项
                 try:
-                    first_option = page.locator("div.question-option-Pvs1Wx").first
-                    first_option.click(timeout=3000)
-                    page.wait_for_timeout(300)
-                    self._log("step_is_success: clicked first role option (fallback)")
-                except Exception as e2:
-                    self._log(f"step_is_success: fallback also failed: {e2}")
-            
-            # 4. 点击 "Continue to Dreamina" 按钮
-            try:
-                continue_btn = page.get_by_role("button", name="Continue to Dreamina")
-                if continue_btn.count() > 0:
-                    # 等待按钮启用（选中角色后按钮会从 disabled 变为 enabled）
+                    role_element = page.get_by_text(selected_role).first
+                    role_element.scroll_into_view_if_needed()
+                    role_element.click(timeout=3000)
+                    page.wait_for_timeout(300)  # 等待选中状态更新
+                    self._log(f"step_is_success: clicked role '{selected_role}'")
+                except Exception as e:
+                    self._log(f"step_is_success: failed to click role '{selected_role}': {e}")
+                    # 降级方案：点击第一个选项
                     try:
-                        continue_btn.first.wait_for(state="enabled", timeout=3000)
-                    except Exception:
-                        self._log("step_is_success: waiting for button to be enabled...")
-                        page.wait_for_timeout(1000)
-                    
-                    continue_btn.first.click(timeout=3000)
-                    self._log("step_is_success: clicked 'Continue to Dreamina' button")
-                    page.wait_for_timeout(500)  # 等待页面跳转
-                    return True
-                else:
-                    self._log("step_is_success: 'Continue to Dreamina' button not found")
+                        first_option = page.locator("div.question-option-Pvs1Wx").first
+                        first_option.click(timeout=3000)
+                        page.wait_for_timeout(300)
+                        self._log("step_is_success: clicked first role option (fallback)")
+                    except Exception as e2:
+                        self._log(f"step_is_success: fallback also failed: {e2}")
+                
+                # 4. 点击 "Continue to Dreamina" 按钮
+                try:
+                    continue_btn = page.get_by_role("button", name="Continue to Dreamina")
+                    if continue_btn.count() > 0:
+                        # 等待按钮启用（选中角色后按钮会从 disabled 变为 enabled）
+                        try:
+                            continue_btn.first.wait_for(state="enabled", timeout=3000)
+                        except Exception:
+                            self._log("step_is_success: waiting for button to be enabled...")
+                            page.wait_for_timeout(1000)
+                        
+                        if "lv-btn-disabled" not in (continue_btn.first.get_attribute("class", timeout=2000) or ""):
+                            continue_btn.first.click()
+                            self._log("step_is_success: clicked 'Continue to Dreamina' button")
+                            page.wait_for_timeout(2000)  # 等待页面跳转
+                        else:
+                            self._log("step_is_success: Continue button still disabled")
+                            return False
+                    else:
+                        self._log("step_is_success: 'Continue to Dreamina' button not found")
+                        return False
+                except Exception as e:
+                    self._log(f"step_is_success: failed to click continue button: {e}")
                     return False
-            except Exception as e:
-                self._log(f"step_is_success: failed to click continue button: {e}")
-                return False
             
+            # 5. 关键：验证是否真正注册成功并进入主页面
+            # 等待页面加载完成
+            try:
+                page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                self._log("step_is_success: network idle timeout, continuing with checks")
+            
+            # 检查URL是否包含主页特征
+            current_url = page.url
+            self._log(f"step_is_success: current URL: {current_url}")
+            
+            # 如果还在登录/注册相关页面，说明注册失败
+            error_url_patterns = [
+                "/login",
+                "/sign-in",
+                "/auth",
+            ]
+            
+            for pattern in error_url_patterns:
+                if pattern in current_url:
+                    self._log(f"step_is_success: ERROR - URL contains '{pattern}', registration failed")
+                    p = self._try_screenshot(page, prefix="still_on_login_page", email="unknown")
+                    suffix = f" | screenshot={p}" if p else ""
+                    raise RuntimeError(f"注册失败，仍在登录页面{suffix}")
+            
+            # 检查页面内容是否有错误提示
+            error_indicators = [
+                "Sign in",
+                "Log in",
+                "Enter email",
+                "verification code",
+                "When's your birthday",
+                "What role best describes you",
+                "Incorrect email or password",
+                "Invalid credentials",
+            ]
+            
+            for indicator in error_indicators:
+                try:
+                    if page.get_by_text(indicator).count() > 0:
+                        self._log(f"step_is_success: ERROR - still on registration page, found '{indicator}'")
+                        p = self._try_screenshot(page, prefix="registration_incomplete", email="unknown")
+                        suffix = f" | screenshot={p}" if p else ""
+                        raise RuntimeError(f"注册未完成，仍停留在{indicator}页面{suffix}")
+                except RuntimeError:
+                    raise
+                except Exception:
+                    pass
+            
+            # 检查成功标志
+            success_markers = [
+                "Start Creating",
+                "Create video",
+                "AI Tools",
+                "Home",
+                "Dashboard",
+            ]
+            
+            # 如果URL明确指向主页且没有错误标志，认为成功
+            if "dreamina.capcut.com" in current_url and "/ai-tool" in current_url:
+                # 进一步验证：检查是否有主页特有的元素
+                try:
+                    # 尝试查找主页特有的元素（根据你的实际页面调整）
+                    home_indicators = [
+                        "Start Creating",
+                        "Create video", 
+                        "AI Tools",
+                    ]
+                    
+                    for marker in home_indicators:
+                        if page.get_by_text(marker).count() > 0:
+                            self._log(f"step_is_success: confirmed success with marker '{marker}'")
+                            return True
+                    
+                    # 如果没有找到明确的标志，但URL正确且没有错误标志，也认为成功
+                    self._log("step_is_success: URL indicates success and no error markers found")
+                    return True
+                except Exception as e:
+                    self._log(f"step_is_success: error checking home indicators: {e}")
+                    return False
+            
+            # 检查其他成功标志
+            for marker in success_markers:
+                try:
+                    if page.get_by_text(marker).count() > 0:
+                        self._log(f"step_is_success: success marker '{marker}' detected")
+                        return True
+                except Exception:
+                    pass
+            
+            self._log("step_is_success: no clear success markers found")
+            return False
+            
+        except RuntimeError:
+            raise
         except Exception as e:
             self._log(f"step_is_success: error occurred: {e}")
             self._try_screenshot(page, prefix="role_selection_error", email="unknown")

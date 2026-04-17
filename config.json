@@ -1,20 +1,20 @@
 {
   "target_url": "https://dreamina.capcut.com/ai-tool/home",
-  "headless": true,
+  "headless": false,
   "concurrent_flows": 1,
   "max_tasks": 0,
 
-  "step_delay_ms": 900,
-  "jitter_ms": 700,
-  "human_pause_ms": 1800,
+  "step_delay_ms": 400,
+  "jitter_ms": 300,
+  "human_pause_ms": 800,
 
-  "otp_timeout_seconds": 300,
-  "otp_poll_interval_ms": 800,
+  "otp_timeout_seconds": 120,
+  "otp_poll_interval_ms": 500,
 
   "sms": {
     "enabled": true,
     "endpoint_url": "https://2925.com/mailv2/maildata/MailList/mails",
-    "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJmbGFnIjoiMCIsImdyYW50X3R5cGUiOiJXZWJDbGllbnQiLCJuYW1lIjoiY2hlbnR1YW5odWkxQDI5MjUuY29tIiwibmlja25hbWUiOiJjaGVudHVhbmh1aTEiLCJpZCI6ImY0Mjk0MjY2LTM4MjItMzJiZi1hMjAwLWUwZWEzODMyN2Y0MiIsImRldmljZUlkIjoiZGV2aWNlSWQiLCJ0b2tlbkZsYWciOiIwIiwiY2xpZW50X2lkIjoiQjkyNTdGN0Y5QjFFRjE1Q0UiLCJyZXFJZCI6ImJmYzkxZGMxLTcxYzMtNGUyNy1hMjM0LWM2ZjAxYjNiNjdhNiIsImF1ZCI6IkI5MjU3RjdGOUIxRUYxNUNFIiwic3ViIjoiZjQyOTQyNjYtMzgyMi0zMmJmLWEyMDAtZTBlYTM4MzI3ZjQyIiwianRpIjoiZjQyOTQyNjYtMzgyMi0zMmJmLWEyMDAtZTBlYTM4MzI3ZjQyIiwiaWF0IjoxNzc1OTE2Nzg1LCJpc3MiOiJodHRwczovL21haWxsb2dpbi4yOTgwLmNvbS9vYXV0aCIsImV4cCI6MTc3NTkyMzk4NSwibmJmIjoxNzc1OTE2NzI1fQ.1pwOkmQX-qXK7fjeR1Zcv2qsVdacQmV3x6WnOxcXnJs",
+    "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJmbGFnIjoiMCIsImdyYW50X3R5cGUiOiJXZWJDbGllbnQiLCJuYW1lIjoiY2hlbnR1YW5odWkxQDI5MjUuY29tIiwibmlja25hbWUiOiJjaGVudHVhbmh1aTEiLCJpZCI6ImY0Mjk0MjY2LTM4MjItMzJiZi1hMjAwLWUwZWEzODMyN2Y0MiIsImRldmljZUlkIjoiZGV2aWNlSWQiLCJ0b2tlbkZsYWciOiIwIiwiY2xpZW50X2lkIjoiQjkyNTdGN0Y5QjFFRjE1Q0UiLCJyZXFJZCI6IjY2Yzk4YzMwLWU2OTMtNDA4YS1hZDcwLTg3YTA0NTFiYmI2MCIsImF1ZCI6IkI5MjU3RjdGOUIxRUYxNUNFIiwic3ViIjoiZjQyOTQyNjYtMzgyMi0zMmJmLWEyMDAtZTBlYTM4MzI3ZjQyIiwianRpIjoiZjQyOTQyNjYtMzgyMi0zMmJmLWEyMDAtZTBlYTM4MzI3ZjQyIiwiaWF0IjoxNzc2Mzg5ODg0LCJpc3MiOiJodHRwczovL21haWxsb2dpbi4yOTgwLmNvbS9vYXV0aCIsImV4cCI6MTc3NjM5NzA4NCwibmJmIjoxNzc2Mzg5ODI0fQ.r851AMgJi-YGsG40kSDA9okAo2g0QHlHR-MFb0rFrMs",
     "timeout_seconds": 60,
     "trace_id_prefix": "fb105ad276de",
     "tls_verify": true

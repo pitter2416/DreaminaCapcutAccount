@@ -127,6 +127,7 @@ def run_one(flow: RegistrationFlow, store: ResultsStore, acc: Account, accounts_
         store.append(
             AccountResult(
                 email=acc.email,
+                password=acc.password,
                 status="otp_timeout",
                 reason=str(e),
                 started_at=started,
@@ -140,6 +141,7 @@ def run_one(flow: RegistrationFlow, store: ResultsStore, acc: Account, accounts_
         store.append(
             AccountResult(
                 email=acc.email,
+                password=acc.password,
                 status="fail",
                 reason=str(e),
                 started_at=started,
