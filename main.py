@@ -423,13 +423,20 @@ def run_loop(cfg: AppConfig) -> None:
                         try:
                             if f.result():
                                 with succeeded_lock:
-                                    succeeded_emails.add(f.acc.email)
-                                    # 检查是否刚达到目标
-                                    if len(succeeded_emails) >= cfg.target_success_count:
-                                        print(f"\n{'='*60}")
-                                        print(f"✅ 已达到目标成功账号数量: {len(succeeded_emails)}/{cfg.target_success_count}")
-                                        print(f"{'='*60}\n")
-                                        stop_requested = True
+                                    # 只有未达到目标时才计入成功
+                                    if len(succeeded_emails) < cfg.target_success_count:
+                                        succeeded_emails.add(f.acc.email)
+                                        print(f"\r[Progress] 成功: {len(succeeded_emails)}/{cfg.target_success_count}", end='', flush=True)
+                                        
+                                        # 检查是否刚达到目标
+                                        if len(succeeded_emails) >= cfg.target_success_count:
+                                            print(f"\n\n{'='*60}")
+                                            print(f"✅ 已达到目标成功账号数量: {len(succeeded_emails)}/{cfg.target_success_count}")
+                                            print(f"{'='*60}\n")
+                                            stop_requested = True
+                                    else:
+                                        # 已达到目标，这个账号不计入（但任务已完成）
+                                        pass
                         except Exception:
                             pass
                     running.remove(f)
@@ -484,32 +491,42 @@ def run_loop(cfg: AppConfig) -> None:
     print(f"  已提交任务: {task_counter}")
     
     # 检查是否达到目标
+    actual_success = min(stats['succeeded'], cfg.target_success_count)
     if stats['succeeded'] >= cfg.target_success_count:
-        print(f"\n✅ 成功！已达到目标成功账号数量: {stats['succeeded']}/{cfg.target_success_count}")
+        print(f"\n✅ 成功！已达到目标成功账号数量: {actual_success}/{cfg.target_success_count}")
         print(f"📦 成功账号已保存到: Results/success_accounts.txt")
     else:
         print(f"\n⚠️  未达到目标成功账号数量: {stats['succeeded']}/{cfg.target_success_count}")
     
-    # 输出所有成功账号信息
+    # 输出所有成功账号信息（只输出目标数量）
     success_accounts_path = os.path.join(cfg.results_dir, "success_accounts.txt")
     if os.path.exists(success_accounts_path):
         with open(success_accounts_path, "r", encoding="utf-8") as f:
-            success_accounts = [line.strip() for line in f if line.strip()]
+            all_success_accounts = [line.strip() for line in f if line.strip()]
         
-        if success_accounts:
+        # 只取目标数量的账号
+        output_accounts = all_success_accounts[:cfg.target_success_count]
+        
+        if output_accounts:
             print(f"\n{'='*60}")
-            print(f"📋 成功账号列表（共 {len(success_accounts)} 个）")
+            print(f"📋 成功账号列表（共 {len(output_accounts)} 个）")
             print(f"{'='*60}")
-            for i, account in enumerate(success_accounts, 1):
+            for i, account in enumerate(output_accounts, 1):
                 print(f"  {i}. {account}")
             print(f"{'='*60}")
             
             # 同时输出到控制台，方便复制
             print(f"\n📄 纯文本格式（方便复制）:")
             print("-" * 60)
-            for account in success_accounts:
+            for account in output_accounts:
                 print(account)
             print("-" * 60)
+            
+            # 如果有多余的账号，提示用户
+            if len(all_success_accounts) > cfg.target_success_count:
+                extra_count = len(all_success_accounts) - cfg.target_success_count
+                print(f"\n⚠️  注意: 实际成功 {len(all_success_accounts)} 个，但只输出前 {cfg.target_success_count} 个")
+                print(f"   多余的 {extra_count} 个账号也保存在 Results/success_accounts.txt 中")
     
     print(f"{'='*60}\n")
 
