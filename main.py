@@ -284,6 +284,26 @@ def run_loop(cfg: AppConfig) -> None:
 
     run_id = cfg.run_id or time.strftime("%Y%m%d-%H%M%S")
     store = ResultsStore(cfg.results_dir, run_id)
+    
+    # 清空本次运行的成功记录，确保从头开始
+    success_path = os.path.join(cfg.results_dir, "success.txt")
+    success_accounts_path = os.path.join(cfg.results_dir, "success_accounts.txt")
+    fail_path = os.path.join(cfg.results_dir, "fail.txt")
+    status_path = os.path.join(cfg.results_dir, "status.jsonl")
+    
+    # 备份旧的成功账号文件（如果存在）
+    import shutil
+    if os.path.exists(success_accounts_path):
+        backup_path = f"{success_accounts_path}.backup.{time.strftime('%Y%m%d-%H%M%S')}"
+        shutil.copy2(success_accounts_path, backup_path)
+        print(f"📦 已备份旧的成功账号文件到: {backup_path}")
+    
+    # 清空成功记录文件
+    for path in [success_path, success_accounts_path, fail_path, status_path]:
+        if os.path.exists(path):
+            open(path, 'w').close()
+    
+    print(f"🔄 已清空上次运行记录，开始新的注册任务\n")
 
     sms_fetcher: Optional[SMSCodeFetcher] = None
     if cfg.sms_enabled:
@@ -494,39 +514,37 @@ def run_loop(cfg: AppConfig) -> None:
     actual_success = min(stats['succeeded'], cfg.target_success_count)
     if stats['succeeded'] >= cfg.target_success_count:
         print(f"\n✅ 成功！已达到目标成功账号数量: {actual_success}/{cfg.target_success_count}")
-        print(f"📦 成功账号已保存到: Results/success_accounts.txt")
     else:
         print(f"\n⚠️  未达到目标成功账号数量: {stats['succeeded']}/{cfg.target_success_count}")
     
-    # 输出所有成功账号信息（只输出目标数量）
+    # 输出所有成功账号信息
     success_accounts_path = os.path.join(cfg.results_dir, "success_accounts.txt")
     if os.path.exists(success_accounts_path):
         with open(success_accounts_path, "r", encoding="utf-8") as f:
             all_success_accounts = [line.strip() for line in f if line.strip()]
         
-        # 只取目标数量的账号
-        output_accounts = all_success_accounts[:cfg.target_success_count]
-        
-        if output_accounts:
+        if all_success_accounts:
             print(f"\n{'='*60}")
-            print(f"📋 成功账号列表（共 {len(output_accounts)} 个）")
+            print(f"📋 本次运行成功账号列表（共 {len(all_success_accounts)} 个）")
             print(f"{'='*60}")
-            for i, account in enumerate(output_accounts, 1):
+            for i, account in enumerate(all_success_accounts, 1):
                 print(f"  {i}. {account}")
             print(f"{'='*60}")
             
             # 同时输出到控制台，方便复制
             print(f"\n📄 纯文本格式（方便复制）:")
             print("-" * 60)
-            for account in output_accounts:
+            for account in all_success_accounts:
                 print(account)
             print("-" * 60)
             
-            # 如果有多余的账号，提示用户
+            # 提示用户文件位置
+            print(f"\n📦 所有成功账号已保存到: {success_accounts_path}")
+            
+            # 如果超过目标数量，给出提示
             if len(all_success_accounts) > cfg.target_success_count:
-                extra_count = len(all_success_accounts) - cfg.target_success_count
-                print(f"\n⚠️  注意: 实际成功 {len(all_success_accounts)} 个，但只输出前 {cfg.target_success_count} 个")
-                print(f"   多余的 {extra_count} 个账号也保存在 Results/success_accounts.txt 中")
+                print(f"ℹ️  注意: 目标数量为 {cfg.target_success_count}，但实际成功 {len(all_success_accounts)} 个")
+                print(f"   （由于并发执行，可能产生额外的成功账号）")
     
     print(f"{'='*60}\n")
 
