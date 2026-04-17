@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import subprocess
@@ -106,8 +107,68 @@ class AppConfig:
 
 
 def load_config() -> AppConfig:
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(
+        description="Dreamina CapCut 账号自动注册工具",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例用法:
+  python3 main.py                              # 使用 config.json 中的配置
+  python3 main.py -t 10                        # 生成10个成功账号后停止
+  python3 main.py --target-success 100         # 生成100个成功账号
+  python3 main.py -t 50 -c 3                   # 50个成功账号，3个并发
+  python3 main.py --headless                   # 无头模式运行
+        """
+    )
+    
+    parser.add_argument(
+        "-t", "--target-success",
+        type=int,
+        default=None,
+        help="目标成功账号数量（覆盖 config.json 中的 target_success_count）"
+    )
+    parser.add_argument(
+        "-c", "--concurrent",
+        type=int,
+        default=None,
+        help="并发数量（覆盖 config.json 中的 concurrent_flows）"
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        default=None,
+        help="无头模式运行（覆盖 config.json 中的 headless）"
+    )
+    parser.add_argument(
+        "--no-headless",
+        action="store_true",
+        default=None,
+        help="有头模式运行（显示浏览器窗口）"
+    )
+    parser.add_argument(
+        "-m", "--max-tasks",
+        type=int,
+        default=None,
+        help="最大任务数（覆盖 config.json 中的 max_tasks，0表示无限）"
+    )
+    
+    args = parser.parse_args()
+    
+    # 加载配置文件
     with open("config.json", "r", encoding="utf-8") as f:
         data = json.load(f)
+    
+    # 应用命令行参数覆盖
+    if args.target_success is not None:
+        data["target_success_count"] = args.target_success
+    if args.concurrent is not None:
+        data["concurrent_flows"] = args.concurrent
+    if args.headless is not None:
+        data["headless"] = True
+    if args.no_headless is not None:
+        data["headless"] = False
+    if args.max_tasks is not None:
+        data["max_tasks"] = args.max_tasks
 
     sms = data.get("sms") or {}
     ft = data.get("failure_throttle") or {}
@@ -428,6 +489,27 @@ def run_loop(cfg: AppConfig) -> None:
         print(f"📦 成功账号已保存到: Results/success_accounts.txt")
     else:
         print(f"\n⚠️  未达到目标成功账号数量: {stats['succeeded']}/{cfg.target_success_count}")
+    
+    # 输出所有成功账号信息
+    success_accounts_path = os.path.join(cfg.results_dir, "success_accounts.txt")
+    if os.path.exists(success_accounts_path):
+        with open(success_accounts_path, "r", encoding="utf-8") as f:
+            success_accounts = [line.strip() for line in f if line.strip()]
+        
+        if success_accounts:
+            print(f"\n{'='*60}")
+            print(f"📋 成功账号列表（共 {len(success_accounts)} 个）")
+            print(f"{'='*60}")
+            for i, account in enumerate(success_accounts, 1):
+                print(f"  {i}. {account}")
+            print(f"{'='*60}")
+            
+            # 同时输出到控制台，方便复制
+            print(f"\n📄 纯文本格式（方便复制）:")
+            print("-" * 60)
+            for account in success_accounts:
+                print(account)
+            print("-" * 60)
     
     print(f"{'='*60}\n")
 
