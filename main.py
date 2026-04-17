@@ -1,5 +1,7 @@
 import json
 import os
+import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -15,6 +17,68 @@ from sms_helper import SMSCodeFetcher, SMSFetcherConfig
 
 
 SHUTTING_DOWN = False
+
+
+def auto_generate_accounts(accounts_file: str, count: int = 20) -> bool:
+    """
+    当账号用尽时，自动生成新账号
+    
+    Args:
+        accounts_file: 账号文件路径
+        count: 生成数量
+    
+    Returns:
+        bool: 是否成功生成
+    """
+    try:
+        print(f"\n[AutoGen] 检测到账号已用完，开始自动生成 {count} 个新账号...")
+        
+        # 获取当前脚本所在目录
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        generator_script = os.path.join(script_dir, "generate_accounts.py")
+        
+        if not os.path.exists(generator_script):
+            print(f"[AutoGen] ❌ 找不到生成脚本: {generator_script}")
+            return False
+        
+        # 调用 generate_accounts.py
+        result = subprocess.run(
+            [
+                sys.executable,
+                generator_script,
+                "-n", str(count),
+                "-o", accounts_file
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        # 打印输出
+        if result.stdout:
+            for line in result.stdout.strip().split('\n'):
+                print(f"[AutoGen] {line}")
+        
+        if result.stderr:
+            print(f"[AutoGen] ⚠️  警告信息:")
+            for line in result.stderr.strip().split('\n'):
+                print(f"[AutoGen]   {line}")
+        
+        if result.returncode == 0:
+            print(f"[AutoGen] ✅ 新账号生成成功")
+            return True
+        else:
+            print(f"[AutoGen] ❌ 生成失败，返回码: {result.returncode}")
+            return False
+            
+    except subprocess.TimeoutExpired:
+        print(f"[AutoGen] ❌ 生成超时（30秒）")
+        return False
+    except Exception as e:
+        print(f"[AutoGen] ❌ 异常: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
 
 
 @dataclass
@@ -173,8 +237,22 @@ def run_loop(cfg: AppConfig) -> None:
     succeeded = store.load_success_set()
     pending_accounts = [a for a in accounts if a.email not in succeeded]
     if not pending_accounts:
-        print("所有账号都已成功记录，退出。")
-        return
+        print("所有账号都已成功记录，尝试自动生成新账号...")
+        # 自动生成新账号
+        if auto_generate_accounts(cfg.accounts_file, count=20):
+            # 重新加载账号
+            accounts = load_accounts(cfg.accounts_file)
+            succeeded = store.load_success_set()
+            pending_accounts = [a for a in accounts if a.email not in succeeded]
+            
+            if not pending_accounts:
+                print("生成后仍然没有可用账号，退出。")
+                return
+            else:
+                print(f"✅ 已加载 {len(pending_accounts)} 个新账号，继续运行...")
+        else:
+            print("自动生成账号失败，退出。")
+            return
 
     controller = BrowserController(
         BrowserConfig(headless=cfg.headless),
@@ -210,9 +288,24 @@ def run_loop(cfg: AppConfig) -> None:
         running = set()
 
         def next_account() -> Optional[Account]:
-            nonlocal next_index
+            nonlocal next_index, pending_accounts
+            if not pending_accounts:
+                # 尝试自动生成新账号
+                print("\n[AutoGen] 运行时检测到账号已用完，尝试生成新账号...")
+                if auto_generate_accounts(cfg.accounts_file, count=20):
+                    # 重新加载账号
+                    accounts = load_accounts(cfg.accounts_file)
+                    succeeded = store.load_success_set()
+                    pending_accounts = [a for a in accounts if a.email not in succeeded]
+                    next_index = 0  # 重置索引
+                    print(f"[AutoGen] ✅ 已加载 {len(pending_accounts)} 个新账号")
+                else:
+                    print("[AutoGen] ❌ 生成失败")
+                    return None
+            
             if not pending_accounts:
                 return None
+            
             for _ in range(len(pending_accounts)):
                 acc = pending_accounts[next_index]
                 next_index = (next_index + 1) % len(pending_accounts)
