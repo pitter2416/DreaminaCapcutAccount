@@ -1,8 +1,9 @@
 {
   "target_url": "https://dreamina.capcut.com/ai-tool/home",
-  "headless": false,
+  "headless": true,
   "concurrent_flows": 1,
-  "max_tasks": 0,
+  "max_tasks": 1,
+  "target_success_count": 1,
 
   "step_delay_ms": 400,
   "jitter_ms": 300,

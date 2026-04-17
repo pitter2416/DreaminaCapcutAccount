@@ -87,6 +87,7 @@ class AppConfig:
     headless: bool
     concurrent_flows: int
     max_tasks: int
+    target_success_count: int  # 目标成功账号数量
     step_delay_ms: int
     jitter_ms: int
     human_pause_ms: int
@@ -126,6 +127,7 @@ def load_config() -> AppConfig:
         headless=bool(data.get("headless", False)),
         concurrent_flows=int(data.get("concurrent_flows", 2)),
         max_tasks=int(data.get("max_tasks", 0)),
+        target_success_count=int(data.get("target_success_count", 1)),
         step_delay_ms=int(data.get("step_delay_ms", 900)),
         jitter_ms=int(data.get("jitter_ms", 700)),
         human_pause_ms=int(data.get("human_pause_ms", 1800)),
@@ -345,6 +347,14 @@ def run_loop(cfg: AppConfig) -> None:
         try:
             while (((infinite_mode or task_counter < cfg.max_tasks) and len(succeeded_emails) < len(pending_accounts))
                    or len(running) > 0):
+                # 检查是否已达到目标成功数量
+                if len(succeeded_emails) >= cfg.target_success_count:
+                    print(f"\n{'='*60}")
+                    print(f"✅ 已达到目标成功账号数量: {len(succeeded_emails)}/{cfg.target_success_count}")
+                    print(f"{'='*60}\n")
+                    stop_requested = True
+                    break
+                
                 done = {f for f in running if f.done()}
                 for f in done:
                     _finish_future(f, stats, throttle_state, cfg.failure_throttle, apply_throttle=True)
@@ -353,13 +363,28 @@ def run_loop(cfg: AppConfig) -> None:
                             if f.result():
                                 with succeeded_lock:
                                     succeeded_emails.add(f.acc.email)
+                                    # 检查是否刚达到目标
+                                    if len(succeeded_emails) >= cfg.target_success_count:
+                                        print(f"\n{'='*60}")
+                                        print(f"✅ 已达到目标成功账号数量: {len(succeeded_emails)}/{cfg.target_success_count}")
+                                        print(f"{'='*60}\n")
+                                        stop_requested = True
                         except Exception:
                             pass
                     running.remove(f)
+                
+                # 如果已请求停止，退出循环
+                if stop_requested:
+                    break
 
                 limit = throttle_state.dynamic_limit
                 while (not stop_requested) and len(running) < limit and ((infinite_mode or task_counter < cfg.max_tasks)
                       and len(succeeded_emails) < len(pending_accounts)):
+                    # 再次检查目标数量
+                    if len(succeeded_emails) >= cfg.target_success_count:
+                        stop_requested = True
+                        break
+                    
                     acc = next_account()
                     if acc is None:
                         break
@@ -388,7 +413,23 @@ def run_loop(cfg: AppConfig) -> None:
             controller.close_all()
 
     total_text = "持续模式" if infinite_mode else str(cfg.max_tasks)
-    print(f"\n[Result] - 共: {total_text}, 已提交 {task_counter}, 成功 {stats['succeeded']}, 失败 {stats['failed']}")
+    print(f"\n{'='*60}")
+    print(f"[Result] 运行结果统计")
+    print(f"{'='*60}")
+    print(f"  运行模式: {total_text}")
+    print(f"  目标成功数: {cfg.target_success_count}")
+    print(f"  实际成功数: {stats['succeeded']}")
+    print(f"  失败数: {stats['failed']}")
+    print(f"  已提交任务: {task_counter}")
+    
+    # 检查是否达到目标
+    if stats['succeeded'] >= cfg.target_success_count:
+        print(f"\n✅ 成功！已达到目标成功账号数量: {stats['succeeded']}/{cfg.target_success_count}")
+        print(f"📦 成功账号已保存到: Results/success_accounts.txt")
+    else:
+        print(f"\n⚠️  未达到目标成功账号数量: {stats['succeeded']}/{cfg.target_success_count}")
+    
+    print(f"{'='*60}\n")
 
 
 if __name__ == "__main__":
